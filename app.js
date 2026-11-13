@@ -18,7 +18,7 @@ const PROFILES_DIR = "/app/profiles";
 // ==========================================
 // KONFIGURASI PEMBATAS (4 ACTIVE, 8 QUEUE)
 // ==========================================
-const MAX_ACTIVE = 4; 
+const MAX_ACTIVE = 2; 
 const MAX_QUEUE = 8;   
 
 let activeTasks = 0;
