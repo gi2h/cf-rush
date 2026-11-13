@@ -1,0 +1,9 @@
+{
+  "name": "cfsolve-railway",
+  "version": "1.0.0",
+  "description": "Cloudflare solver via cfsolve",
+  "main": "app.js",
+  "scripts": { "start": "node app.js" },
+  "dependencies": { "express": "^4.19.2" },
+  "engines": { "node": ">=20" }
+}
