@@ -1,4 +1,4 @@
-// app.js — dengan penanganan error yang lebih baik
+// app.js — versi tangguh dengan penyimpanan file
 const express = require("express");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
@@ -13,30 +13,42 @@ app.use(express.json());
 const CFSOLVE_BIN = process.env.CFSOLVE_BIN || "/usr/local/bin/challenge";
 const CFSOLVE_PROFILE = process.env.CFSOLVE_PROFILE || "/app/profiles/safari-26-ios.json";
 const TASK_TIMEOUT = 120000;
+const TASKS_FILE = path.join(os.tmpdir(), "tasks.json"); // Simpan di /tmp
 
-const tasks = {};
+// Muat task dari file saat server start
+let tasks = {};
+if (fs.existsSync(TASKS_FILE)) {
+    try {
+        tasks = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8"));
+    } catch (e) {
+        console.error("Gagal memuat tasks.json:", e);
+    }
+}
+
+// Simpan task ke file setiap ada perubahan
+function saveTasks() {
+    try {
+        fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+    } catch (e) {
+        console.error("Gagal menyimpan tasks.json:", e);
+    }
+}
 
 function runCfsolve(pageUrl, { proxy, sitekey, action, cdata, blankPage, mode } = {}) {
     return new Promise((resolve, reject) => {
         const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "cfsolve-"));
         const args = ["--page", pageUrl, workDir, "--solve", "--fingerprint", CFSOLVE_PROFILE];
-
         if (proxy) args.push("--proxy", proxy);
-
-        // Jika ini mode Turnstile dan kita punya sitekey, gunakan --blank-page
         if (mode === "turnstile" && sitekey) {
             args.push("--sitekey", sitekey);
             if (blankPage) args.push("--blank-page");
             if (action) args.push("--action", action);
             if (cdata) args.push("--cdata", cdata);
         }
-        // Jika mode interstitial (challenge page), JANGAN pakai --sitekey
-        // agar cfsolve tahu harus menyelesaikan challenge page
-
         execFile(CFSOLVE_BIN, args, { timeout: TASK_TIMEOUT }, (err, stdout, stderr) => {
             try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-            if (err) return reject(new Error(stderr.slice(-300) || err.message));
-            const out = stdout.trim();
+            if (err) return reject(new Error((stderr || "").slice(-300) || err.message));
+            const out = (stdout || "").trim();
             if (!out) return reject(new Error("Empty output"));
             if (out.startsWith("cf_clearance=")) return resolve({ cf_clearance: out.split("=")[1] });
             return resolve({ token: out });
@@ -56,6 +68,7 @@ app.post("/solve", async (req, res) => {
     const proxy = process.env.TERTUYUL_PROXY || body.task.proxy;
 
     tasks[taskId] = { status: "pending", taskId };
+    saveTasks(); // Simpan segera
     res.json({ taskId, status: "pending" });
 
     try {
@@ -67,22 +80,19 @@ app.post("/solve", async (req, res) => {
             blankPage: body.task.blankPage,
             mode: type,
         });
-
         const solution = type === "turnstile"
             ? { token: result.token }
             : { cf_clearance: result.cf_clearance };
-
         tasks[taskId] = { status: "ready", taskId, solution };
     } catch (err) {
-        // Jika error "page has no .cf-turnstile container", beri pesan yang lebih jelas
         let apiErr = err.message;
         if (apiErr.includes("page has no .cf-turnstile container")) {
-            apiErr = "Situs target menggunakan Challenge Page, bukan Widget Turnstile. Ubah type menjadi 'interstitial' atau kosongkan websiteKey.";
+            apiErr = "Situs target memakai Challenge Page. Ubah type menjadi 'interstitial' atau kosongkan websiteKey.";
         }
         tasks[taskId] = { status: "error", taskId, err: { usr: "ERROR_CAPTCHA_UNSOLVABLE", api: apiErr } };
     }
-
-    setTimeout(() => delete tasks[taskId], 30000);
+    saveTasks(); // Simpan status akhir
+    setTimeout(() => { delete tasks[taskId]; saveTasks(); }, 30000);
 });
 
 app.listen(port, "0.0.0.0", () => console.log(`Running on ${port}`));
