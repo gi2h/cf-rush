@@ -23,17 +23,26 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
+# Install unzip untuk mengekstrak profiles.zip
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN npm install --omit=dev
 
 COPY app.js ./
 
+# EKSTRAK PROFILES.ZIP KE DALAM /app/profiles/
+COPY profiles.zip /app/profiles.zip
+RUN mkdir -p /app/profiles && \
+    unzip /app/profiles.zip -d /app/profiles/ && \
+    rm /app/profiles.zip
+
+# Copy binary cfsolve dari stage 1
 COPY --from=rust-builder /src/cfsolve/target/release/challenge /usr/local/bin/challenge
-COPY --from=rust-builder /src/cfsolve/profiles/ /app/profiles/
 
 ENV NODE_ENV=production
 ENV CFSOLVE_BIN=/usr/local/bin/challenge
-ENV CFSOLVE_PROFILE=/app/profiles/safari-26-ios.json
 ENV PORT=3000
 
 EXPOSE 3000
