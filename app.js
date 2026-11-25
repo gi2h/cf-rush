@@ -97,7 +97,12 @@ function redactSecrets(text, secrets = []) {
 
 let tasks = {};
 if (fs.existsSync(TASKS_FILE)) {
-    try { tasks = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8")); } catch (e) {}
+    try {
+        const loaded = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8")) || {};
+        // Task pending tidak punya job aktif lagi setelah restart; jangan biarkan
+        // mereka mengisi antrean/status selamanya.
+        tasks = Object.fromEntries(Object.entries(loaded).filter(([, t]) => t && t.status !== "pending"));
+    } catch (e) {}
 }
 function saveTasks() { try { fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2)); } catch (e) {} }
 
