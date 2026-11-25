@@ -192,3 +192,39 @@ Saat ini `/faucet/currency/ltc` yang diretasi:
 - Semua header `Cf-Mitigated: challenge` — murni Cloudflare
 - Daily klaim 43→46/2000 (pada saat direct route masih bekerja)
 - CEK status: `sf-status.json`
+
+---
+
+## 10. EarnLoop Turnstile — managed widget mode (25 Nov 2026)
+
+Gejala dari EarnLoop ke `gi8/gi9.up.railway.app`:
+
+```
+POST returned HTTP 200 OK; saved ~8 KB
+Third response: not complete; program strings
+["window", "_cf_chl_opt", "widgetId", "source", "postMessage", "parent",
+ "frMd", "fail", "event", "code", ..., "cloudflare-challenge", "cfChlOut"]
+```
+
+Investigasi artefak cfsolve (`options.json`, `iframe.html`) menunjukkan Cloudflare mengirim
+`mode: managed` dan `chl_api_m`, bukan widget `normal`. Program ketiga adalah orchestrator
+challenge page yang mengirim `cf_chl_out`, bukan program `event:"complete"` dengan token
+`1.…`. Jadi cfsolve tidak bisa menghasilkan `cf-turnstile-response` dari mode ini, berapapun
+profil/attempt-nya. `--blank-page` juga tetap mendapat mode `managed`.
+
+Ini bukan bugs scraping EarnLoop dan bukan bisa diperbaiki dengan proxy: Railway wajib
+tanpa proxy, dan justru IP Railway yang membuat Cloudflare memilih mode managed.
+
+Penanganan yang dipakai:
+
+- `app.js` menandai error ini sebagai `err.usr = "CF_MANAGED_WIDGET"` + `hint`, lalu
+  **di server** langsung memanggil Tertuyul dan mengembalikan token Turnstile normal.
+  Endpoint tetap `status:"ready"` dengan `solution.source = "tertuyul"`, jadi semua client
+  (EarnLoop/Earnviv) otomatis terbantu tanpa perlu tahu detail mode Cloudflare.
+- Environment Railway yang dibutuhkan: `TERTUYUL_KEY` (wajib untuk fallback),
+  opsional `TERTUYUL_API`, `TERTUYUL_TIMEOUT_MS`, `TERTUYUL_POLL_MS`.
+  Tanpa key, error yang dikembalikan `TERTUYUL_KEY_MISSING`.
+- `fp/earnloop-final.py` juga punya fallback client-side sebagai cadangan: mendeteksi
+  penanda managed, mencoba gi8/gi9 sekali, lalu Tertuyul (tidak menunggu 3x fail penuh).
+- Tertuyul berhasil menghasilkan token EarnLoop untuk sitekey
+  `0x4AAAAAAGCiUxIHxufSgUzL` (token length ~645) dalam ~18 detik.
