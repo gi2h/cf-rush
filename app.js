@@ -220,11 +220,17 @@ function runBrowserTurnstile({ websiteUrl, sitekey, action, cdata, userAgent, pr
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, [BROWSER_TURNSTILE_RUNNER], {
             cwd: __dirname,
-            stdio: ["pipe", "pipe", "pipe"]
+            stdio: ["pipe", "pipe", "pipe"],
+            detached: true
         });
         let stdout = "", stderr = "", settled = false;
         const budget = Math.max(30000, timeoutMs || TASK_TIMEOUT);
-        const timer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, budget + 15000);
+        const timer = setTimeout(() => {
+            if (settled) return;
+            try { process.kill(-child.pid, "SIGKILL"); }
+            catch (_) { try { child.kill("SIGKILL"); } catch (_) {} }
+            finish(reject, new Error("Browser Turnstile timeout"));
+        }, budget + 15000);
         const finish = (handler, value) => {
             if (settled) return;
             settled = true;
