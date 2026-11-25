@@ -101,18 +101,23 @@ async function solve(payload) {
 
         const deadline = Date.now() + timeoutMs;
         let lastToken = "";
-        while (Date.now() < deadline) {
-            lastToken = await page.evaluate(() => {
-                const el = document.querySelector('input[name="cf-turnstile-response"]');
-                return el ? String(el.value || "") : "";
-            }).catch(() => "");
-            if (lastToken) {
-                const usedUa = await page.evaluate(() => navigator.userAgent).catch(() => ua);
-                return { ok: true, token: lastToken, user_agent: usedUa };
+        for (let round = 0; round < 2 && Date.now() < deadline; round++) {
+            if (round > 0) {
+                try { await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }); } catch (_) {}
             }
-            // Managed widget bisa meminta klik; klik elemen widget aslinya.
-            try { await page.click(".cf-turnstile"); } catch (_) {}
-            await sleep(1000);
+            while (Date.now() < deadline) {
+                lastToken = await page.evaluate(() => {
+                    const el = document.querySelector('input[name="cf-turnstile-response"]');
+                    return el ? String(el.value || "") : "";
+                }).catch(() => "");
+                if (lastToken) {
+                    const usedUa = await page.evaluate(() => navigator.userAgent).catch(() => ua);
+                    return { ok: true, token: lastToken, user_agent: usedUa };
+                }
+                // Managed widget bisa meminta klik; klik elemen widget aslinya.
+                try { await page.click(".cf-turnstile"); } catch (_) {}
+                await sleep(1000);
+            }
         }
         return { ok: false, error: "NO_TURNSTILE_TOKEN" };
     } catch (e) {

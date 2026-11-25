@@ -21,7 +21,11 @@ const WAF_RUNNER = path.join(__dirname, "cf_waf_solver.py");
 const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.js");
 
 const MAX_ACTIVE = 2; 
-const MAX_QUEUE = 8;   
+const MAX_QUEUE = 8;
+
+// Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
+// saling berebut memori/CPU di container Railway.
+let browserTurnstileChain = Promise.resolve();
 
 let activeTasks = 0;
 const queue = [];
@@ -258,6 +262,15 @@ function runBrowserTurnstile({ websiteUrl, sitekey, action, cdata, userAgent, pr
     });
 }
 
+function runBrowserTurnstileSerialized(opts) {
+    const job = browserTurnstileChain.then(
+        () => runBrowserTurnstile(opts),
+        () => runBrowserTurnstile(opts)
+    );
+    browserTurnstileChain = job.catch(() => {});
+    return job;
+}
+
 function processQueue() {
     while (activeTasks < MAX_ACTIVE && queue.length > 0) {
         const taskJob = queue.shift();
@@ -383,7 +396,7 @@ const solveHandler = async (req, res) => {
 
                         let browserErr = null;
                         try {
-                            const br = await runBrowserTurnstile({
+                            const br = await runBrowserTurnstileSerialized({
                                 websiteUrl,
                                 sitekey: task.websiteKey || task.sitekey,
                                 action: task.action,
