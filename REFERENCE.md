@@ -217,14 +217,11 @@ tanpa proxy, dan justru IP Railway yang membuat Cloudflare memilih mode managed.
 
 Penanganan yang dipakai:
 
-- `app.js` menandai error ini sebagai `err.usr = "CF_MANAGED_WIDGET"` + `hint`, lalu
-  **di server** langsung memanggil Tertuyul dan mengembalikan token Turnstile normal.
-  Endpoint tetap `status:"ready"` dengan `solution.source = "tertuyul"`, jadi semua client
-  (EarnLoop/Earnviv) otomatis terbantu tanpa perlu tahu detail mode Cloudflare.
-- Key Tertuyul sudah menjadi default di `app.js` (repo terbuka), jadi deploy langsung
-  bekerja tanpa environment variable. Opsi override: `TERTUYUL_KEY`, `TERTUYUL_API`,
-  `TERTUYUL_TIMEOUT_MS`, `TERTUYUL_POLL_MS`.
-- `fp/earnloop-final.py` juga punya fallback client-side sebagai cadangan: mendeteksi
-  penanda managed, mencoba gi8/gi9 sekali, lalu Tertuyul (tidak menunggu 3x fail penuh).
+- `app.js` hanya menandai error ini sebagai `err.usr = "CF_MANAGED_WIDGET"` + `hint`.
+  Solver **tidak** melakukan fallback ke provider lain; rotasi/fallback diserahkan
+  sepenuhnya ke client (EarnLoop, Earnviv, atau lainnya).
+- Tidak ada key/env khusus di repo untuk kasus ini.
+- `fp/earnloop-final.py` mendeteksi penanda managed, mencoba gi8/gi9 sekali, lalu
+  melakukan fallback sesuai kebijakan EarnLoop (Tertuyul), tanpa menunggu 3x fail penuh.
 - Tertuyul berhasil menghasilkan token EarnLoop untuk sitekey
   `0x4AAAAAAGCiUxIHxufSgUzL` (token length ~645) dalam ~18 detik.

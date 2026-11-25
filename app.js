@@ -19,14 +19,6 @@ const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const ADSLAB_RUNNER = path.join(__dirname, "adslab_runner.py");
 const WAF_RUNNER = path.join(__dirname, "cf_waf_solver.py");
 
-// Tertuyul dipakai di server hanya saat cfsolve mendeteksi managed widget:
-// mode itu menghasilkan cf_chl_out/orchestrator, bukan token Turnstile.
-// Key default sengaja disertakan karena repo ini terbuka; env bisa meng-override.
-const TERTUYUL_API = (process.env.TERTUYUL_API || "http://api.tertuyul.my.id").replace(/\/+$/, "");
-const TERTUYUL_KEY = process.env.TERTUYUL_KEY || "90d4b91a1c3c2e430fa3e17f62a4d545";
-const TERTUYUL_TIMEOUT_MS = Math.max(30000, parseInt(process.env.TERTUYUL_TIMEOUT_MS, 10) || 120000);
-const TERTUYUL_POLL_MS = Math.max(1000, parseInt(process.env.TERTUYUL_POLL_MS, 10) || 3000);
-
 const MAX_ACTIVE = 2; 
 const MAX_QUEUE = 8;   
 
@@ -157,45 +149,6 @@ function runCfsolve(pageUrl, { proxy, sitekey, action, cdata, blankPage, mode, p
             return resolve({ token: lines.length ? lines[lines.length - 1] : out });
         });
     });
-}
-
-async function runTertuyul({ pageUrl, sitekey } = {}) {
-    const deadline = Date.now() + TERTUYUL_TIMEOUT_MS;
-    const submitUrl = `${TERTUYUL_API}/in.php`;
-    const pollUrl = `${TERTUYUL_API}/res.php`;
-    const submit = await fetch(submitUrl, {
-        method: "POST",
-        body: new URLSearchParams({
-            key: TERTUYUL_KEY, method: "turnstile",
-            pageurl: String(pageUrl || ""), sitekey: String(sitekey || ""), json: "1"
-        }),
-        signal: AbortSignal.timeout(Math.min(60000, TERTUYUL_TIMEOUT_MS))
-    });
-    const submitted = await submit.json();
-    if (Number(submitted.status) !== 1) {
-        throw new Error(`tertuyul submit: ${JSON.stringify(submitted).slice(0, 200)}`);
-    }
-    const taskId = submitted.request;
-    if (!taskId || String(taskId).startsWith("ERROR_")) {
-        throw new Error(`tertuyul task: ${taskId}`);
-    }
-    while (Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, TERTUYUL_POLL_MS));
-        const polled = await fetch(pollUrl, {
-            method: "POST",
-            body: new URLSearchParams({ key: TERTUYUL_KEY, action: "get", id: String(taskId), json: "1" }),
-            signal: AbortSignal.timeout(45000)
-        });
-        const result = await polled.json();
-        const request = result.request;
-        if (Number(result.status) === 1 && request && request !== "CAPCHA_NOT_READY") {
-            return String(request);
-        }
-        if (request && String(request).startsWith("ERROR_")) {
-            throw new Error(`tertuyul error: ${request}`);
-        }
-    }
-    throw new Error("tertuyul timeout");
 }
 
 function runAdslab({ sitekey, siteurl, subId, proxy, cookies, ua } = {}) {
@@ -367,50 +320,27 @@ const solveHandler = async (req, res) => {
                         }
                     }
                 } else {
-                    let result = null;
-                    try {
-                        result = await runCfsolve(websiteUrl, {
-                            proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
-                            cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
-                        });
-                    } catch (e) {
-                        if (type !== "turnstile" || !e.cfManagedWidget) throw e;
-                        let token;
-                        try {
-                            token = await runTertuyul({
-                                pageUrl: websiteUrl,
-                                sitekey: task.websiteKey || task.sitekey
-                            });
-                        } catch (te) {
-                            const fallbackErr = new Error(`tertuyul fallback gagal: ${te.message}`);
-                            fallbackErr.cfManagedWidget = true;
-                            fallbackErr.tertuyulFailed = true;
-                            throw fallbackErr;
+                    const result = await runCfsolve(websiteUrl, {
+                        proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
+                        cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
+                    });
+                    if (type === "turnstile") {
+                        if (!result || !result.token) throw new Error("cfsolve returned no turnstile token");
+                        solution = { token: result.token };
+                    } else {
+                        if (!result || !result.cf_clearance) {
+                            throw new Error(result && result.token ? `unexpected cfsolve output: ${String(result.token).slice(0, 220)}` : "cfsolve returned no cf_clearance");
                         }
-                        solution = { token, source: "tertuyul", fallback: "CF_MANAGED_WIDGET" };
-                        console.log(`[FALLBACK] Task ${taskId}: managed widget -> Tertuyul OK`);
-                    }
-                    if (!solution) {
-                        if (type === "turnstile") {
-                            if (!result || !result.token) throw new Error("cfsolve returned no turnstile token");
-                            solution = { token: result.token, source: "cfsolve" };
-                        } else {
-                            if (!result || !result.cf_clearance) {
-                                throw new Error(result && result.token ? `unexpected cfsolve output: ${String(result.token).slice(0, 220)}` : "cfsolve returned no cf_clearance");
-                            }
-                            solution = { cf_clearance: result.cf_clearance, profile: profileName };
-                        }
+                        solution = { cf_clearance: result.cf_clearance, profile: profileName };
                     }
                 }
                 tasks[taskId] = { status: "ready", taskId, solution };
                 console.log(`[SUKSES] Task ${taskId} selesai (${type || profileName})`);
             } catch (err) {
-                const safeErr = redactSecrets(err.message, [proxy, cookies, TERTUYUL_KEY]);
-                const usr = err.tertuyulFailed ? "TERTUYUL_FALLBACK_FAILED"
-                    : err.cfManagedWidget ? "CF_MANAGED_WIDGET"
-                    : "ERROR_CAPTCHA_UNSOLVABLE";
+                const safeErr = redactSecrets(err.message, [proxy, cookies]);
+                const usr = err.cfManagedWidget ? "CF_MANAGED_WIDGET" : "ERROR_CAPTCHA_UNSOLVABLE";
                 const hint = err.cfManagedWidget
-                    ? "Cloudflare served a managed challenge widget; use a token fallback solver"
+                    ? "Cloudflare served a managed challenge widget; no Turnstile token is available from cfsolve"
                     : undefined;
                 tasks[taskId] = { status: "error", taskId, err: { usr, api: safeErr, ...(hint ? { hint } : {}) } };
                 console.log(`[GAGAL] Task ${taskId} (${type || profileName}): ${safeErr}`);
