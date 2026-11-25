@@ -18,6 +18,7 @@ const PROFILES_DIR = process.env.PROFILES_DIR || "/app/profiles";
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const ADSLAB_RUNNER = path.join(__dirname, "adslab_runner.py");
 const WAF_RUNNER = path.join(__dirname, "cf_waf_solver.py");
+const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.js");
 
 const MAX_ACTIVE = 2; 
 const MAX_QUEUE = 8;   
@@ -208,6 +209,55 @@ function runCfWaf({ siteurl, proxy, cookies, ua, timeoutMs, forceHard } = {}) {
     });
 }
 
+// Browser-based Turnstile solver: dipakai saat cfsolve mendeteksi managed widget.
+// Layanan captcha berbayar memakai browser sungguhan + closed-shadow click, bukan
+// emulasi payload HTTP seperti cfsolve.
+function runBrowserTurnstile({ websiteUrl, sitekey, action, cdata, userAgent, proxy, timeoutMs } = {}) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [BROWSER_TURNSTILE_RUNNER], {
+            cwd: __dirname,
+            stdio: ["pipe", "pipe", "pipe"]
+        });
+        let stdout = "", stderr = "", settled = false;
+        const budget = Math.max(30000, timeoutMs || TASK_TIMEOUT);
+        const timer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, budget + 15000);
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            handler(value);
+        };
+        child.stdout.on("data", c => { stdout += c.toString(); });
+        child.stderr.on("data", c => {
+            const line = redactSecrets(c.toString().trim(), [proxy]).slice(0, 300);
+            if (line) console.error(`[TS-Browser-Err] ${line}`);
+        });
+        child.on("error", err => finish(reject, err));
+        child.on("close", () => {
+            try {
+                const lines = stdout.trim().split("\n").filter(Boolean);
+                const parsed = JSON.parse(lines[lines.length - 1]);
+                if (parsed.ok && parsed.token) {
+                    finish(resolve, { token: parsed.token, ua: parsed.user_agent || null });
+                } else {
+                    finish(reject, new Error(parsed.error || "Browser Turnstile failed"));
+                }
+            } catch (e) {
+                finish(reject, new Error(stderr.trim().split("\n").pop() || "Invalid JSON Browser Turnstile"));
+            }
+        });
+        child.stdin.end(JSON.stringify({
+            websiteURL: websiteUrl,
+            websiteKey: sitekey,
+            action: action,
+            cdata: cdata,
+            userAgent: userAgent,
+            proxy: proxy,
+            timeoutMs: budget
+        }));
+    });
+}
+
 function processQueue() {
     while (activeTasks < MAX_ACTIVE && queue.length > 0) {
         const taskJob = queue.shift();
@@ -328,36 +378,64 @@ const solveHandler = async (req, res) => {
                         });
                     } catch (e) {
                         if (type !== "turnstile" || !e.cfManagedWidget) throw e;
-                        // Managed widget tidak bisa menghasilkan token Turnstile. Lempar ke
-                        // CF solver internal: WAF + hard browser (tanpa proxy dari env).
                         const managedErr = redactSecrets(e.message, [proxy, cookies]).slice(0, 300);
-                        console.log(`[CF] Task ${taskId}: managed widget, lempar ke CF solver`);
-                        let cf = null;
+                        console.log(`[CF] Task ${taskId}: managed widget, coba browser Turnstile solver`);
+
+                        let browserErr = null;
                         try {
-                            cf = await runCfWaf({
-                                siteurl: websiteUrl,
-                                proxy: proxy, cookies: cookies, ua: ua,
-                                timeoutMs: Math.max(30000, timeoutMs), forceHard: true
+                            const br = await runBrowserTurnstile({
+                                websiteUrl,
+                                sitekey: task.websiteKey || task.sitekey,
+                                action: task.action,
+                                cdata: task.cdata,
+                                userAgent: ua,
+                                proxy: proxy,
+                                timeoutMs: Math.max(60000, timeoutMs)
                             });
-                        } catch (ce) {
-                            const wrapped = new Error(`managed widget; CF solver gagal: ${redactSecrets(ce.message, [proxy, cookies]).slice(0, 200)}`);
-                            wrapped.cfManagedWidget = true;
-                            wrapped.cfSolverFailed = true;
-                            throw wrapped;
+                            solution = {
+                                token: br.token,
+                                ua: br.ua,
+                                source: "browser_turnstile",
+                                cfsolve_error: managedErr
+                            };
+                            console.log(`[SUKSES] Task ${taskId}: token Turnstile dari browser solver`);
+                        } catch (be) {
+                            browserErr = be;
+                            console.log(`[CF] Task ${taskId}: browser Turnstile gagal: ${redactSecrets(be.message, [proxy, cookies]).slice(0, 200)}; coba CF WAF`);
                         }
-                        if (!cf || !cf.cf_clearance || cf.type === "none") {
-                            const wrapped = new Error(`managed widget; CF solver tidak menemukan challenge (${cf ? cf.type : "no_result"})`);
-                            wrapped.cfManagedWidget = true;
-                            wrapped.cfSolverNoChallenge = true;
-                            throw wrapped;
+
+                        if (!solution) {
+                            let cf = null;
+                            try {
+                                cf = await runCfWaf({
+                                    siteurl: websiteUrl,
+                                    proxy: proxy, cookies: cookies, ua: ua,
+                                    timeoutMs: Math.max(30000, timeoutMs), forceHard: true
+                                });
+                            } catch (ce) {
+                                const detail = [
+                                    browserErr ? `browser:${redactSecrets(browserErr.message, [proxy, cookies]).slice(0, 120)}` : null,
+                                    `cf:${redactSecrets(ce.message, [proxy, cookies]).slice(0, 160)}`
+                                ].filter(Boolean).join("; ");
+                                const wrapped = new Error(`managed widget; solver gagal: ${detail}`);
+                                wrapped.cfManagedWidget = true;
+                                wrapped.cfSolverFailed = true;
+                                throw wrapped;
+                            }
+                            if (!cf || !cf.cf_clearance || cf.type === "none") {
+                                const wrapped = new Error(`managed widget; CF solver tidak menemukan challenge (${cf ? cf.type : "no_result"})`);
+                                wrapped.cfManagedWidget = true;
+                                wrapped.cfSolverNoChallenge = true;
+                                throw wrapped;
+                            }
+                            solution = {
+                                cf_clearance: cf.cf_clearance,
+                                ua: cf.ua || null,
+                                type: cf.type || "managed_cf",
+                                source: "cf_waf",
+                                cfsolve_error: managedErr
+                            };
                         }
-                        solution = {
-                            cf_clearance: cf.cf_clearance,
-                            ua: cf.ua || null,
-                            type: cf.type || "managed_cf",
-                            source: "cf_waf",
-                            cfsolve_error: managedErr
-                        };
                     }
                     if (!solution) {
                         if (type === "turnstile") {
@@ -377,7 +455,7 @@ const solveHandler = async (req, res) => {
                 const safeErr = redactSecrets(err.message, [proxy, cookies]);
                 const usr = err.cfManagedWidget ? "CF_MANAGED_WIDGET" : "ERROR_CAPTCHA_UNSOLVABLE";
                 const hint = err.cfManagedWidget
-                    ? "Cloudflare served a managed challenge widget; no Turnstile token is available from cfsolve"
+                    ? "Cloudflare served a managed challenge widget; browser solver dan CF solver tidak menghasilkan token"
                     : undefined;
                 tasks[taskId] = { status: "error", taskId, err: { usr, api: safeErr, ...(hint ? { hint } : {}) } };
                 console.log(`[GAGAL] Task ${taskId} (${type || profileName}): ${safeErr}`);

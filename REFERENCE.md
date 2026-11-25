@@ -239,3 +239,35 @@ Penanganan yang dipakai:
   - Sitekey Earnviv `0x4AAAAAAAEiKsK1WWJpk5H5` juga `managed`.
   Artinya ini bukan semata IP Railway yang diblokir; Cloudflare mengubah alur widget
   managed untuk solver request-based secara umum.
+
+---
+
+## 11. Kenapa provider berbayar bisa: browser sungguhan, bukan emulasi request
+
+Tertuyul (`method=turnstile`) tetap menghasilkan token untuk sitekey EarnLoop walau
+cfsolve gagal. Dari dokumentasi dan implementasi open-source sejenis dapat disimpulkan
+mereka tidak memakai pendekatan `cfsolve`:
+
+- `method=cloudflare` mereka mengembalikan `cf_clearance` **plus User-Agent**, dengan
+  proxy wajib. Ini ciri token yang terikat pada browser/fingerprint, bukan string statis.
+- Katalog mereka berisi solver khusus situs (`adslab`, `earnloop/gridvision`,
+  `bitcotask`, dll), artinya ada automation + CV/OCR di belakang, bukan satu biner generik.
+- Solver managed Turnstile-open-source yang benar (Theyka/Turnstile-Solver,
+  Camoufox-captcha, Turnstile-Solver-NEW) semuanya memakai:
+  - browser sungguhan (Patchright/Camoufox, headful + profil persisten),
+  - halaman stub dengan `div.cf-turnstile` dan sitekey target,
+  - klik widget lewat closed-shadow DOM bila diminta,
+  - pembacaan `input[name=cf-turnstile-response]`.
+
+Karena itu cf-rush sekarang punya `turnstile_browser_solver.js` (browser via
+`puppeteer-real-browser`). Saat cfsolve mendeteksi managed widget, `app.js` mencoba
+solver browser ini lebih dulu. Token dikembalikan sebagai:
+
+```json
+{"token":"1.…","ua":"Mozilla/5.0 …"}
+```
+
+dengan `solution.source = "browser_turnstile"`. Bila browser solver gagal, rute lama
+`runCfWaf({forceHard:true})` tetap dipakai, lalu `err.usr = "CF_MANAGED_WIDGET"`.
+
+Env opsional: `CF_BROWSER_HEADLESS=0` untuk memaksa headful (butuh X server/Xvfb).
