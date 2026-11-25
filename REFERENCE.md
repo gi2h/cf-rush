@@ -232,3 +232,10 @@ Penanganan yang dipakai:
   `cf_clearance`. Jadi solver CF harus tetap diamati terhadap perubahan widget.
 - Deploy awal di Railway pernah mengembalikan stdout hard solver non-JSON; parser
   `call_hard_solver()` sekarang mengabaikan baris warning dan mengambil baris JSON.
+- Uji lanjutan dengan proxy (25 Nov):
+  - DC sticky `gate-us.vaultproxies.com:777` → tetap `managed`, CF solver `No cf_clearance`.
+  - Residential `gate-eu.vaultproxies.com:8080` → request dari Railway timeout, tidak bisa dipakai.
+  - Kelima profil (`iphone-12-mini` … `safari-26-ios`) → semuanya `managed`.
+  - Sitekey Earnviv `0x4AAAAAAAEiKsK1WWJpk5H5` juga `managed`.
+  Artinya ini bukan semata IP Railway yang diblokir; Cloudflare mengubah alur widget
+  managed untuk solver request-based secara umum.
