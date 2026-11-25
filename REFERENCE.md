@@ -217,11 +217,16 @@ tanpa proxy, dan justru IP Railway yang membuat Cloudflare memilih mode managed.
 
 Penanganan yang dipakai:
 
-- `app.js` hanya menandai error ini sebagai `err.usr = "CF_MANAGED_WIDGET"` + `hint`.
-  Solver **tidak** melakukan fallback ke provider lain; rotasi/fallback diserahkan
-  sepenuhnya ke client (EarnLoop, Earnviv, atau lainnya).
-- Tidak ada key/env khusus di repo untuk kasus ini.
-- `fp/earnloop-final.py` mendeteksi penanda managed, mencoba gi8/gi9 sekali, lalu
-  melakukan fallback sesuai kebijakan EarnLoop (Tertuyul), tanpa menunggu 3x fail penuh.
-- Tertuyul berhasil menghasilkan token EarnLoop untuk sitekey
-  `0x4AAAAAAGCiUxIHxufSgUzL` (token length ~645) dalam ~18 detik.
+- Managed widget dilempar ke **CF solver internal** cf-rush, bukan ke provider eksternal.
+  `app.js` memanggil `runCfWaf()` dengan `forceHard:true`, sehingga mencoba soft WAF
+  (`curl_cffi`) lalu hard browser (`cf_hard_solver.js` / `puppeteer-real-browser`),
+  tetap tanpa proxy dari environment.
+- Bila CF solver mendapat `cf_clearance`, task kembali `ready` dengan
+  `solution.source = "cf_waf"` dan `cfsolve_error` sebagai diagnostik.
+- Bila CF solver tidak menemukan challenge atau gagal, endpoint mengembalikan
+  `err.usr = "CF_MANAGED_WIDGET"`; rotasi/fallback tetap menjadi keputusan client
+  (EarnLoop, Earnviv, atau lainnya).
+- Tidak ada key/env khusus di repo untuk alur ini.
+- Catatan uji: `cfwaf` langsung ke `https://earnloop.online/faucet/LTC` mengembalikan
+  `NO_CF` (halamannya tidak ter-challenge), dan hard browser tidak mendapat
+  `cf_clearance`. Jadi solver CF harus tetap diamati terhadap perubahan widget.

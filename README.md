@@ -2,17 +2,20 @@
 
 Solver API Turnstile / CF-WAF / AdsLab.
 
-## Managed Turnstile widget
+## Managed Turnstile widget -> CF solver internal
 
 Jika cfsolve mendeteksi Cloudflare `managed` widget (program `cf_chl_out` / orchestrator,
-bukan token `1.…`), endpoint mengembalikan error dengan:
+bukan token `1.…`), task Turnstile dilempar ke **CF solver internal** cf-rush:
 
-```json
-"err": { "usr": "CF_MANAGED_WIDGET", "hint": "..." }
-```
+1. `cf_waf_solver.py` (soft WAF via `curl_cffi`, lalu hard browser via
+   `cf_hard_solver.js` dengan `puppeteer-real-browser`),
+2. tanpa proxy dari environment,
+3. hasil berupa `cf_clearance` bila challenge berhasil di-clear.
 
-Solver sengaja **tidak** melakukan fallback ke provider lain. Client (EarnLoop, Earnviv,
-atau lainnya) yang melakukan rotasi/fallback sesuai kebijakan masing-masing. Tidak ada
-environment variable khusus untuk ini.
+Jika CF solver tidak menemukan challenge / tidak menghasilkan clearance, endpoint
+mengembalikan `err.usr = "CF_MANAGED_WIDGET"` supaya client melakukan rotasi/fallback
+sesuai kebijakan masing-masing.
+
+Tidak ada key atau environment variable khusus untuk alur ini.
 
 Detail investigasi ada di `REFERENCE.md` section 10.

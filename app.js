@@ -175,7 +175,7 @@ function runAdslab({ sitekey, siteurl, subId, proxy, cookies, ua } = {}) {
     });
 }
 
-function runCfWaf({ siteurl, proxy, cookies, ua, timeoutMs } = {}) {
+function runCfWaf({ siteurl, proxy, cookies, ua, timeoutMs, forceHard } = {}) {
     return new Promise((resolve, reject) => {
         const childEnv = { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" };
         // WAF: proxy hanya dari payload task, jangan biarkan env override.
@@ -204,7 +204,7 @@ function runCfWaf({ siteurl, proxy, cookies, ua, timeoutMs } = {}) {
                 finish(reject, new Error(`Python Error: ${stderr || stdout}`)); 
             }
         });
-        child.stdin.end(JSON.stringify({ task: { websiteURL: siteurl, proxy: proxy, cookies: cookies, ua: ua } }));
+        child.stdin.end(JSON.stringify({ task: { websiteURL: siteurl, proxy: proxy, cookies: cookies, ua: ua, forceHard: !!forceHard } }));
     });
 }
 
@@ -320,18 +320,55 @@ const solveHandler = async (req, res) => {
                         }
                     }
                 } else {
-                    const result = await runCfsolve(websiteUrl, {
-                        proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
-                        cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
-                    });
-                    if (type === "turnstile") {
-                        if (!result || !result.token) throw new Error("cfsolve returned no turnstile token");
-                        solution = { token: result.token };
-                    } else {
-                        if (!result || !result.cf_clearance) {
-                            throw new Error(result && result.token ? `unexpected cfsolve output: ${String(result.token).slice(0, 220)}` : "cfsolve returned no cf_clearance");
+                    let result = null;
+                    try {
+                        result = await runCfsolve(websiteUrl, {
+                            proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
+                            cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
+                        });
+                    } catch (e) {
+                        if (type !== "turnstile" || !e.cfManagedWidget) throw e;
+                        // Managed widget tidak bisa menghasilkan token Turnstile. Lempar ke
+                        // CF solver internal: WAF + hard browser (tanpa proxy dari env).
+                        const managedErr = redactSecrets(e.message, [proxy, cookies]).slice(0, 300);
+                        console.log(`[CF] Task ${taskId}: managed widget, lempar ke CF solver`);
+                        let cf = null;
+                        try {
+                            cf = await runCfWaf({
+                                siteurl: websiteUrl,
+                                proxy: proxy, cookies: cookies, ua: ua,
+                                timeoutMs: Math.max(30000, timeoutMs), forceHard: true
+                            });
+                        } catch (ce) {
+                            const wrapped = new Error(`managed widget; CF solver gagal: ${redactSecrets(ce.message, [proxy, cookies]).slice(0, 200)}`);
+                            wrapped.cfManagedWidget = true;
+                            wrapped.cfSolverFailed = true;
+                            throw wrapped;
                         }
-                        solution = { cf_clearance: result.cf_clearance, profile: profileName };
+                        if (!cf || !cf.cf_clearance || cf.type === "none") {
+                            const wrapped = new Error(`managed widget; CF solver tidak menemukan challenge (${cf ? cf.type : "no_result"})`);
+                            wrapped.cfManagedWidget = true;
+                            wrapped.cfSolverNoChallenge = true;
+                            throw wrapped;
+                        }
+                        solution = {
+                            cf_clearance: cf.cf_clearance,
+                            ua: cf.ua || null,
+                            type: cf.type || "managed_cf",
+                            source: "cf_waf",
+                            cfsolve_error: managedErr
+                        };
+                    }
+                    if (!solution) {
+                        if (type === "turnstile") {
+                            if (!result || !result.token) throw new Error("cfsolve returned no turnstile token");
+                            solution = { token: result.token };
+                        } else {
+                            if (!result || !result.cf_clearance) {
+                                throw new Error(result && result.token ? `unexpected cfsolve output: ${String(result.token).slice(0, 220)}` : "cfsolve returned no cf_clearance");
+                            }
+                            solution = { cf_clearance: result.cf_clearance, profile: profileName };
+                        }
                     }
                 }
                 tasks[taskId] = { status: "ready", taskId, solution };

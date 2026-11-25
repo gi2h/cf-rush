@@ -19,7 +19,7 @@ def call_hard_solver(url, proxy, ua):
     except Exception as e:
         return {"ok": False, "error": f"Hard solver error: {str(e)}"}
 
-def solve_waf(url, proxy=None, cookies=None, ua=None):
+def solve_waf(url, proxy=None, cookies=None, ua=None, force_hard=False):
     session = requests.Session(impersonate="safari15_5")
     if proxy: session.proxies = {"http": proxy, "https": proxy}
     if cookies: session.cookies.update(cookies)
@@ -29,7 +29,7 @@ def solve_waf(url, proxy=None, cookies=None, ua=None):
         r = session.get(url, timeout=30, allow_redirects=True)
         cf_clearance = session.cookies.get("cf_clearance")
         
-        if not check_cf(r.text, r.status_code) and not cf_clearance:
+        if not check_cf(r.text, r.status_code) and not cf_clearance and not force_hard:
             return {"ok": True, "token": "NO_CF", "ua": session.headers.get("User-Agent"), "type": "none"}
 
         if cf_clearance and not check_cf(r.text, r.status_code):
@@ -58,7 +58,10 @@ if __name__ == "__main__":
         task = data.get("task", {})
         c_str = task.get("cookies", "")
         cookies = {c.split("=")[0].strip(): c.split("=")[1].strip() for c in c_str.split(";") if "=" in c}
-        res = solve_waf(task.get("websiteURL"), task.get("proxy"), cookies, task.get("ua"))
+        res = solve_waf(
+            task.get("websiteURL"), task.get("proxy"), cookies, task.get("ua"),
+            force_hard=bool(task.get("forceHard")),
+        )
         
         # PASTIKAN HANYA MENGELUARKAN JSON
         print(json.dumps(res))
