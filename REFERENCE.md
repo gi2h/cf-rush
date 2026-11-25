@@ -221,9 +221,9 @@ Penanganan yang dipakai:
   **di server** langsung memanggil Tertuyul dan mengembalikan token Turnstile normal.
   Endpoint tetap `status:"ready"` dengan `solution.source = "tertuyul"`, jadi semua client
   (EarnLoop/Earnviv) otomatis terbantu tanpa perlu tahu detail mode Cloudflare.
-- Environment Railway yang dibutuhkan: `TERTUYUL_KEY` (wajib untuk fallback),
-  opsional `TERTUYUL_API`, `TERTUYUL_TIMEOUT_MS`, `TERTUYUL_POLL_MS`.
-  Tanpa key, error yang dikembalikan `TERTUYUL_KEY_MISSING`.
+- Key Tertuyul sudah menjadi default di `app.js` (repo terbuka), jadi deploy langsung
+  bekerja tanpa environment variable. Opsi override: `TERTUYUL_KEY`, `TERTUYUL_API`,
+  `TERTUYUL_TIMEOUT_MS`, `TERTUYUL_POLL_MS`.
 - `fp/earnloop-final.py` juga punya fallback client-side sebagai cadangan: mendeteksi
   penanda managed, mencoba gi8/gi9 sekali, lalu Tertuyul (tidak menunggu 3x fail penuh).
 - Tertuyul berhasil menghasilkan token EarnLoop untuk sitekey

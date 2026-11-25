@@ -21,8 +21,9 @@ const WAF_RUNNER = path.join(__dirname, "cf_waf_solver.py");
 
 // Tertuyul dipakai di server hanya saat cfsolve mendeteksi managed widget:
 // mode itu menghasilkan cf_chl_out/orchestrator, bukan token Turnstile.
+// Key default sengaja disertakan karena repo ini terbuka; env bisa meng-override.
 const TERTUYUL_API = (process.env.TERTUYUL_API || "http://api.tertuyul.my.id").replace(/\/+$/, "");
-const TERTUYUL_KEY = process.env.TERTUYUL_KEY || "";
+const TERTUYUL_KEY = process.env.TERTUYUL_KEY || "90d4b91a1c3c2e430fa3e17f62a4d545";
 const TERTUYUL_TIMEOUT_MS = Math.max(30000, parseInt(process.env.TERTUYUL_TIMEOUT_MS, 10) || 120000);
 const TERTUYUL_POLL_MS = Math.max(1000, parseInt(process.env.TERTUYUL_POLL_MS, 10) || 3000);
 
@@ -159,7 +160,6 @@ function runCfsolve(pageUrl, { proxy, sitekey, action, cdata, blankPage, mode, p
 }
 
 async function runTertuyul({ pageUrl, sitekey } = {}) {
-    if (!TERTUYUL_KEY) throw new Error("TERTUYUL_KEY belum diset di environment Railway");
     const deadline = Date.now() + TERTUYUL_TIMEOUT_MS;
     const submitUrl = `${TERTUYUL_API}/in.php`;
     const pollUrl = `${TERTUYUL_API}/res.php`;
@@ -375,10 +375,6 @@ const solveHandler = async (req, res) => {
                         });
                     } catch (e) {
                         if (type !== "turnstile" || !e.cfManagedWidget) throw e;
-                        if (!TERTUYUL_KEY) {
-                            e.fallbackMissing = true;
-                            throw e;
-                        }
                         let token;
                         try {
                             token = await runTertuyul({
@@ -411,7 +407,6 @@ const solveHandler = async (req, res) => {
             } catch (err) {
                 const safeErr = redactSecrets(err.message, [proxy, cookies, TERTUYUL_KEY]);
                 const usr = err.tertuyulFailed ? "TERTUYUL_FALLBACK_FAILED"
-                    : err.fallbackMissing ? "TERTUYUL_KEY_MISSING"
                     : err.cfManagedWidget ? "CF_MANAGED_WIDGET"
                     : "ERROR_CAPTCHA_UNSOLVABLE";
                 const hint = err.cfManagedWidget
