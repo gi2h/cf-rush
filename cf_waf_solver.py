@@ -13,9 +13,19 @@ def call_hard_solver(url, proxy, ua):
         p = subprocess.Popen(["node", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         out, err = p.communicate(input=payload, timeout=90)
         text = (out or "").strip()
+        stderr = (err or "").strip()
         if not text:
-            return {"ok": False, "error": f"Hard solver empty output: {(err or '').strip()[:300]}"}
-        return json.loads(text)
+            return {"ok": False, "error": f"Hard solver empty output: {stderr[:300]}"}
+        try:
+            return json.loads(text)
+        except Exception:
+            # Beberapa runtime menyisipkan baris non-JSON (warning node) sebelum JSON.
+            for line in reversed([l.strip() for l in text.splitlines() if l.strip().startswith("{")]):
+                try:
+                    return json.loads(line)
+                except Exception:
+                    pass
+            return {"ok": False, "error": f"Hard solver output bukan JSON: {text[:200]} | stderr: {stderr[:200]}"}
     except Exception as e:
         return {"ok": False, "error": f"Hard solver error: {str(e)}"}
 

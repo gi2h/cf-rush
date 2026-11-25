@@ -230,3 +230,5 @@ Penanganan yang dipakai:
 - Catatan uji: `cfwaf` langsung ke `https://earnloop.online/faucet/LTC` mengembalikan
   `NO_CF` (halamannya tidak ter-challenge), dan hard browser tidak mendapat
   `cf_clearance`. Jadi solver CF harus tetap diamati terhadap perubahan widget.
+- Deploy awal di Railway pernah mengembalikan stdout hard solver non-JSON; parser
+  `call_hard_solver()` sekarang mengabaikan baris warning dan mengambil baris JSON.
