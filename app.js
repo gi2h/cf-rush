@@ -143,7 +143,7 @@ function runCfsolve(pageUrl, { proxy, sitekey, action, cdata, blankPage, mode, p
                 const detail = lines.slice(-3).join(" | ").slice(0, 350);
                 // Managed widget/challenge orchestrator cannot yield a cf-turnstile-response
                 // token. Flag it so callers can switch to a fallback solver immediately.
-                const managedWidget = /(_cf_chl_opt|cloudflare-challenge|cfChlOut|cfChlOutS|frMd|challenge did not complete after the interaction POST)/i.test(rawErr);
+                const managedWidget = /(_cf_chl_opt|cloudflare-challenge|cfChlOut|cfChlOutS|frMd|challenge did not complete after the interaction POST|POST returned HTTP 200 OK|Third response:\s*not complete|program strings)/i.test(rawErr);
                 const failure = new Error(detail || shortErr);
                 failure.cfManagedWidget = managedWidget;
                 return reject(failure);
@@ -401,9 +401,12 @@ const solveHandler = async (req, res) => {
                             cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
                         });
                     } catch (e) {
-                        if (type !== "turnstile" || !e.cfManagedWidget) throw e;
+                        // Cloudflare bisa mengubah mode widget kapan saja. Jangan batasi
+                        // browser solver hanya pada pola managed lama: setiap kegagalan
+                        // cfsolve turnstile harus dicoba dengan browser sungguhan dulu.
+                        if (type !== "turnstile") throw e;
                         const managedErr = redactSecrets(e.message, [proxy, cookies]).slice(0, 300);
-                        console.log(`[CF] Task ${taskId}: managed widget, coba browser Turnstile solver`);
+                        console.log(`[CF] Task ${taskId}: cfsolve gagal (${e.cfManagedWidget ? "managed widget" : "mode unknown"}), coba browser Turnstile solver`);
 
                         let browserErr = null;
                         try {
