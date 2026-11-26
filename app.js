@@ -24,7 +24,7 @@ const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.
 // memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
 const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
-const APP_VERSION = "2026-11-26.6";
+const APP_VERSION = "2026-11-26.7";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
@@ -422,7 +422,6 @@ const solveHandler = async (req, res) => {
                     const browserFirst = type === "turnstile" && (
                         task.browserFirst === true || task.browserFirst === 1
                         || String(task.browserFirst) === "1"
-                        || (!body.task && task.browserFirst == null)
                         || process.env.TURNSTILE_BROWSER_FIRST === "1");
                     let browserFirstTried = false;
                     if (browserFirst) {
@@ -450,10 +449,29 @@ const solveHandler = async (req, res) => {
                     let result = null;
                     if (!solution) {
                     try {
-                        result = await runCfsolve(websiteUrl, {
-                            proxy, sitekey: sitekey, action: task.action,
-                            cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
-                        });
+                        // Turnstile: binari cfsolve memakai browser + fingerprint profile
+                        // nyata. Coba dua profile sebelum jatuh ke browser solver.
+                        const rushAttempts = type === "turnstile"
+                            ? Math.min(2, Math.max(1, PROFILES.length)) : 1;
+                        for (let attempt = 0; attempt < rushAttempts; attempt++) {
+                            const prof = type === "turnstile" ? getNextProfile() : selectedProfile;
+                            result = await runCfsolve(websiteUrl, {
+                                proxy, sitekey: sitekey, action: task.action,
+                                cdata: task.cdata, blankPage: task.blankPage, mode: type,
+                                profilePath: prof, ua: ua, timeoutMs
+                            });
+                            if (type === "turnstile" && result && result.token) {
+                                solution = {
+                                    token: result.token,
+                                    ua: getProfileUa(prof, ua),
+                                    source: "cfsolve",
+                                    profile: path.basename(path.dirname(prof)),
+                                    attempts: attempt + 1,
+                                };
+                                break;
+                            }
+                            if (type !== "turnstile") break;
+                        }
                     } catch (e) {
                         // Cloudflare bisa mengubah mode widget kapan saja. Jangan batasi
                         // browser solver hanya pada pola managed lama: setiap kegagalan

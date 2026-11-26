@@ -29,7 +29,9 @@ Endpoint `/solve` juga menerima payload dinamis minimal:
 
 `domain` boleh tanpa `https://`; server menambahkannya. Field lama
 `{"task":{"type":"turnstile","websiteURL":"...","websiteKey":"..."}}`
-tetap didukung. Untuk payload minimal, browser-first aktif default.
+tetap didukung. Untuk Turnstile, binari `cfsolve` dengan profil browser nyata
+dipakai lebih dulu (maksimal dua profil), lalu browser blank-page dan CF WAF
+sebagai fallback. Kirim `browserFirst: true` bila ingin membalik urutannya.
 
 Turnstile browser solver sekarang memakai blank page + injection callback
 `onloadTurnstileCallback`, hidden input `cf-response`, dan klik checkbox pada
