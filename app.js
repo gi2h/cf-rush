@@ -24,7 +24,7 @@ const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.
 // memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
 const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
-const APP_VERSION = "2026-11-26.5";
+const APP_VERSION = "2026-11-26.6";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
@@ -309,21 +309,28 @@ app.get("/health", (_req, res) => res.json({
 const solveHandler = async (req, res) => {
     const body = req.body || {};
     if (body.taskId && tasks[body.taskId]) return res.json(tasks[body.taskId]);
-    if (!body.task) return res.status(400).json({ error: "Missing task" });
-
-    const task = body.task;
-    const type = String(task.type || "").toLowerCase();
+    // Terima dua bentuk payload:
+    //   {"task":{...}}   dan   {"domain":"...","sitekey":"..."}
+    const task = (body.task && typeof body.task === "object") ? body.task : body;
+    const type = String(task.type || "turnstile").toLowerCase();
     const isAdslab = type.includes("ads") || type.includes("alcaptcha") || type.includes("adslab");
     const isWaf = type === "cfwaf" || type === "cfwaftask" || type === "waf" || type.includes("interstitial") || type.includes("cfwaf");
     // Proxy HANYA dari payload task — env tidak lagi menimpa (membersihkan alur python)
     const proxy = String(task.proxy || "").trim();
     const cookies = task.cookies || "";
     const ua = task.ua || task.userAgent || "";  // NEW: accept UA from task or session
-    const websiteUrl = task.websiteURL || task.websiteUrl || task.siteurl || task.pageUrl || task.url || "";
+    const rawSite = (task.websiteURL || task.websiteUrl || task.siteurl
+        || task.pageUrl || task.url || task.domain || task.site || task.host || "").trim();
+    let websiteUrl = rawSite;
+    if (websiteUrl && !/^https?:\/\//i.test(websiteUrl)) {
+        websiteUrl = "https://" + websiteUrl.replace(/^\/+/, "");
+    }
+    const sitekey = String(task.websiteKey || task.siteKey || task.sitekey || task.key || "").trim();
     const timeoutMs = Math.max(30000, parseInt(task.timeout || process.env.TASK_TIMEOUT || TASK_TIMEOUT, 10) || TASK_TIMEOUT);
 
     if (queue.length >= MAX_QUEUE) return res.status(429).json({ status: "error", err: { usr: "QUEUE_FULL" } });
-    if (!websiteUrl) return res.status(400).json({ status: "error", error: "Missing websiteUrl", err: { usr: "ERROR_BAD_PARAMETERS" } });
+    if (!websiteUrl) return res.status(400).json({ status: "error", error: "Missing websiteUrl/domain", err: { usr: "ERROR_BAD_PARAMETERS" } });
+    if (type.includes("turnstile") && !sitekey) return res.status(400).json({ status: "error", error: "Missing websiteKey/sitekey", err: { usr: "ERROR_BAD_PARAMETERS" } });
 
     const taskId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
     const selectedProfile = (isAdslab || isWaf) ? null : getNextProfile();
@@ -341,7 +348,7 @@ const solveHandler = async (req, res) => {
                 let solution;
                 if (isAdslab) {
                     solution = await runAdslab({
-                        sitekey: task.websiteKey || task.sitekey,
+                        sitekey: sitekey,
                         siteurl: websiteUrl,
                         subId: task.subId || task.subid || "widget_user",
                         proxy: proxy, cookies: cookies, ua: ua
@@ -370,7 +377,7 @@ const solveHandler = async (req, res) => {
                             const wafProfileName = path.basename(path.dirname(prof));
                             try {
                                 const result = await runCfsolve(websiteUrl, {
-                                    proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
+                                    proxy, sitekey: sitekey, action: task.action,
                                     cdata: task.cdata, blankPage: task.blankPage, mode: "challenge",
                                     profilePath: prof, ua, timeoutMs: attemptTimeout, httpTimeoutSec
                                 });
@@ -415,6 +422,7 @@ const solveHandler = async (req, res) => {
                     const browserFirst = type === "turnstile" && (
                         task.browserFirst === true || task.browserFirst === 1
                         || String(task.browserFirst) === "1"
+                        || (!body.task && task.browserFirst == null)
                         || process.env.TURNSTILE_BROWSER_FIRST === "1");
                     let browserFirstTried = false;
                     if (browserFirst) {
@@ -422,7 +430,7 @@ const solveHandler = async (req, res) => {
                         try {
                             const br = await runBrowserTurnstileSerialized({
                                 websiteUrl,
-                                sitekey: task.websiteKey || task.sitekey,
+                                sitekey: sitekey,
                                 action: task.action,
                                 cdata: task.cdata,
                                 userAgent: ua,
@@ -443,7 +451,7 @@ const solveHandler = async (req, res) => {
                     if (!solution) {
                     try {
                         result = await runCfsolve(websiteUrl, {
-                            proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
+                            proxy, sitekey: sitekey, action: task.action,
                             cdata: task.cdata, blankPage: task.blankPage, mode: type, profilePath: selectedProfile, ua: ua, timeoutMs
                         });
                     } catch (e) {
@@ -461,7 +469,7 @@ const solveHandler = async (req, res) => {
                             try {
                                 const br = await runBrowserTurnstileSerialized({
                                     websiteUrl,
-                                    sitekey: task.websiteKey || task.sitekey,
+                                    sitekey: sitekey,
                                     action: task.action,
                                     cdata: task.cdata,
                                     userAgent: ua,

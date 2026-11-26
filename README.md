@@ -21,6 +21,16 @@ rotasi/fallback sesuai kebijakan masing-masing.
 Env opsional: `CF_BROWSER_HEADLESS=0` untuk browser headful (butuh X server/Xvfb).
 Tidak ada key provider captcha di repo.
 
+Endpoint `/solve` juga menerima payload dinamis minimal:
+
+```json
+{"domain":"example.com","sitekey":"1x00000000000000000000AA"}
+```
+
+`domain` boleh tanpa `https://`; server menambahkannya. Field lama
+`{"task":{"type":"turnstile","websiteURL":"...","websiteKey":"..."}}`
+tetap didukung. Untuk payload minimal, browser-first aktif default.
+
 Turnstile browser solver sekarang memakai blank page + injection callback
 `onloadTurnstileCallback`, hidden input `cf-response`, dan klik checkbox pada
 iframe Cloudflare bila diminta. Task bisa mengirim `browserFirst: true` untuk
