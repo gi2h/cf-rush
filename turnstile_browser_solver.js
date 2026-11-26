@@ -1,7 +1,6 @@
 // turnstile_browser_solver.js — solver Turnstile managed berbasis browser sungguhan.
-// Strategi ini mengikuti apa yang dipakai layanan berbayar/open-source:
-// render widget di halaman stub dengan sitekey target, klik widget jika perlu,
-// lalu baca input cf-turnstile-response.
+// Render widget dengan sitekey target, simpan token lewat callback DAN hidden
+// input, serta coba klik checkbox/iframe bila Cloudflare meminta interaksi.
 const { connect } = require("puppeteer-real-browser");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -14,9 +13,11 @@ function escAttr(value) {
         .replace(/>/g, "&gt;");
 }
 
-function buildHtml({ sitekey, action, cdata }) {
+function buildHtml({ sitekey, action, cdata, theme }) {
     const attrs = [
         `data-sitekey="${escAttr(sitekey)}"`,
+        `data-theme="${escAttr(theme || "light")}"`,
+        `data-callback="__cfTurnstileToken"`,
         action ? `data-action="${escAttr(action)}"` : "",
         cdata ? `data-cdata="${escAttr(cdata)}"` : ""
     ].filter(Boolean).join(" ");
@@ -24,14 +25,51 @@ function buildHtml({ sitekey, action, cdata }) {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Turnstile</title>
+<script>
+window.__tsToken = "";
+window.__cfTurnstileToken = function(token) { window.__tsToken = String(token || ""); };
+</script>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
-<body>
-<div class="cf-turnstile" style="background:#fff;width:300px;height:65px" ${attrs}></div>
+<body style="margin:0;background:#fff">
+<div class="cf-turnstile" style="width:300px;height:65px;margin:24px" ${attrs}></div>
 </body>
 </html>`;
+}
+
+async function readToken(page) {
+    return page.evaluate(() => {
+        if (window.__tsToken) return String(window.__tsToken);
+        const el = document.querySelector('input[name="cf-turnstile-response"]')
+            || document.querySelector('textarea[name="cf-turnstile-response"]');
+        return el ? String(el.value || "") : "";
+    }).catch(() => "");
+}
+
+async function interact(page) {
+    // Turnstile bisa berada di iframe Cloudflare. Klik widget utama dan
+    // checkbox di iframe bila tersedia. Aman bila tidak ada.
+    try { await page.click(".cf-turnstile"); } catch (_) {}
+    try {
+        for (const frame of page.frames()) {
+            const url = String(frame.url() || "");
+            if (!/challenges\.cloudflare\.com/.test(url)) continue;
+            for (const sel of ["input[type=checkbox]", ".cb-container", "body"]) {
+                try { await frame.click(sel); break; } catch (_) {}
+            }
+        }
+    } catch (_) {}
+    try {
+        await page.evaluate(() => {
+            try {
+                const el = document.querySelector(".cf-turnstile");
+                const id = el && el.getAttribute("data-widget-id");
+                if (window.turnstile && id) window.turnstile.execute(id);
+            } catch (_) {}
+        });
+    } catch (_) {}
 }
 
 async function solve(payload) {
@@ -41,6 +79,7 @@ async function solve(payload) {
 
     const ua = payload.userAgent || payload.ua || "";
     const proxy = payload.proxy ? String(payload.proxy) : "";
+    const theme = payload.theme || "light";
     const timeoutMs = Math.min(120000, Math.max(20000, parseInt(payload.timeoutMs, 10) || 90000));
     const headless = process.env.CF_BROWSER_HEADLESS !== "0";
 
@@ -78,11 +117,7 @@ async function solve(payload) {
         }
 
         const stubUrl = websiteUrl.endsWith("/") ? websiteUrl : websiteUrl + "/";
-        const html = buildHtml({
-            sitekey,
-            action: payload.action,
-            cdata: payload.cdata
-        });
+        const html = buildHtml({ sitekey, action: payload.action, cdata: payload.cdata, theme });
 
         await page.setRequestInterception(true);
         page.on("request", (req) => {
@@ -101,25 +136,28 @@ async function solve(payload) {
 
         const deadline = Date.now() + timeoutMs;
         let lastToken = "";
-        for (let round = 0; round < 2 && Date.now() < deadline; round++) {
-            if (round > 0) {
-                try { await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }); } catch (_) {}
+        let round = 0;
+        while (Date.now() < deadline && !lastToken) {
+            lastToken = await readToken(page);
+            if (lastToken) break;
+            if (round === 0 || Math.floor((deadline - Date.now()) / 1000) % 10 === 0) {
+                await interact(page);
             }
-            while (Date.now() < deadline) {
-                lastToken = await page.evaluate(() => {
-                    const el = document.querySelector('input[name="cf-turnstile-response"]');
-                    return el ? String(el.value || "") : "";
-                }).catch(() => "");
-                if (lastToken) {
-                    const usedUa = await page.evaluate(() => navigator.userAgent).catch(() => ua);
-                    return { ok: true, token: lastToken, user_agent: usedUa };
-                }
-                // Managed widget bisa meminta klik; klik elemen widget aslinya.
-                try { await page.click(".cf-turnstile"); } catch (_) {}
-                await sleep(1000);
+            if (Date.now() + 5000 > deadline && round === 0) {
+                // Reset sekali sebelum waktu habis, tanpa reload seluruh halaman.
+                round = 1;
+                try {
+                    await page.evaluate(() => {
+                        try { if (window.turnstile) window.turnstile.reset(); } catch (_) {}
+                    });
+                } catch (_) {}
             }
+            await sleep(1000);
         }
-        return { ok: false, error: "NO_TURNSTILE_TOKEN" };
+        if (!lastToken) return { ok: false, error: "NO_TURNSTILE_TOKEN" };
+
+        const usedUa = await page.evaluate(() => navigator.userAgent).catch(() => ua);
+        return { ok: true, token: lastToken, user_agent: usedUa };
     } catch (e) {
         return { ok: false, error: String(e && e.message ? e.message : e) };
     } finally {

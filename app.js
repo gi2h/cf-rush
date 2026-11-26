@@ -24,7 +24,7 @@ const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.
 // memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
 const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
-const APP_VERSION = "2026-11-26.1";
+const APP_VERSION = "2026-11-26.2";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
@@ -410,7 +410,35 @@ const solveHandler = async (req, res) => {
                         }
                     }
                 } else {
+                    // Opsional: browser solver lebih dulu untuk Turnstile. Berguna saat
+                    // Railway IP kena managed widget dan cfsolve selalu salah kelas.
+                    const browserFirst = type === "turnstile" && (
+                        task.browserFirst === true || task.browserFirst === 1
+                        || String(task.browserFirst) === "1"
+                        || process.env.TURNSTILE_BROWSER_FIRST === "1");
+                    if (browserFirst) {
+                        try {
+                            const br = await runBrowserTurnstileSerialized({
+                                websiteUrl,
+                                sitekey: task.websiteKey || task.sitekey,
+                                action: task.action,
+                                cdata: task.cdata,
+                                userAgent: ua,
+                                proxy: proxy,
+                                timeoutMs: Math.max(60000, timeoutMs)
+                            });
+                            solution = {
+                                token: br.token,
+                                ua: br.ua,
+                                source: "browser_turnstile",
+                            };
+                            console.log(`[SUKSES] Task ${taskId}: browser Turnstile first berhasil`);
+                        } catch (be) {
+                            console.log(`[CF] Task ${taskId}: browser-first gagal: ${redactSecrets(be.message, [proxy, cookies]).slice(0, 200)}; lanjut cfsolve`);
+                        }
+                    }
                     let result = null;
+                    if (!solution) {
                     try {
                         result = await runCfsolve(websiteUrl, {
                             proxy, sitekey: task.websiteKey || task.sitekey, action: task.action,
@@ -479,6 +507,7 @@ const solveHandler = async (req, res) => {
                                 cfsolve_error: managedErr
                             };
                         }
+                    }
                     }
                     if (!solution) {
                         if (type === "turnstile") {
