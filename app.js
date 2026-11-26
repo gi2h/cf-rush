@@ -24,7 +24,7 @@ const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.
 // memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
 const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
-const APP_VERSION = "2026-11-26.4";
+const APP_VERSION = "2026-11-26.5";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
@@ -416,7 +416,9 @@ const solveHandler = async (req, res) => {
                         task.browserFirst === true || task.browserFirst === 1
                         || String(task.browserFirst) === "1"
                         || process.env.TURNSTILE_BROWSER_FIRST === "1");
+                    let browserFirstTried = false;
                     if (browserFirst) {
+                        browserFirstTried = true;
                         try {
                             const br = await runBrowserTurnstileSerialized({
                                 websiteUrl,
@@ -450,29 +452,33 @@ const solveHandler = async (req, res) => {
                         // cfsolve turnstile harus dicoba dengan browser sungguhan dulu.
                         if (type !== "turnstile") throw e;
                         const managedErr = redactSecrets(e.message, [proxy, cookies]).slice(0, 300);
-                        console.log(`[CF] Task ${taskId}: cfsolve gagal (${e.cfManagedWidget ? "managed widget" : "mode unknown"}), coba browser Turnstile solver`);
-
                         let browserErr = null;
-                        try {
-                            const br = await runBrowserTurnstileSerialized({
-                                websiteUrl,
-                                sitekey: task.websiteKey || task.sitekey,
-                                action: task.action,
-                                cdata: task.cdata,
-                                userAgent: ua,
-                                proxy: proxy,
-                                timeoutMs: Math.max(60000, timeoutMs)
-                            });
-                            solution = {
-                                token: br.token,
-                                ua: br.ua,
-                                source: "browser_turnstile",
-                                cfsolve_error: managedErr
-                            };
-                            console.log(`[SUKSES] Task ${taskId}: token Turnstile dari browser solver`);
-                        } catch (be) {
-                            browserErr = be;
-                            console.log(`[CF] Task ${taskId}: browser Turnstile gagal: ${redactSecrets(be.message, [proxy, cookies]).slice(0, 200)}; coba CF WAF`);
+                        if (browserFirstTried) {
+                            browserErr = new Error("browser-first already failed");
+                            console.log(`[CF] Task ${taskId}: cfsolve gagal dan browser-first sudah dicoba; langsung CF WAF`);
+                        } else {
+                            console.log(`[CF] Task ${taskId}: cfsolve gagal (${e.cfManagedWidget ? "managed widget" : "mode unknown"}), coba browser Turnstile solver`);
+                            try {
+                                const br = await runBrowserTurnstileSerialized({
+                                    websiteUrl,
+                                    sitekey: task.websiteKey || task.sitekey,
+                                    action: task.action,
+                                    cdata: task.cdata,
+                                    userAgent: ua,
+                                    proxy: proxy,
+                                    timeoutMs: Math.max(60000, timeoutMs)
+                                });
+                                solution = {
+                                    token: br.token,
+                                    ua: br.ua,
+                                    source: "browser_turnstile",
+                                    cfsolve_error: managedErr
+                                };
+                                console.log(`[SUKSES] Task ${taskId}: token Turnstile dari browser solver`);
+                            } catch (be) {
+                                browserErr = be;
+                                console.log(`[CF] Task ${taskId}: browser Turnstile gagal: ${redactSecrets(be.message, [proxy, cookies]).slice(0, 200)}; coba CF WAF`);
+                            }
                         }
 
                         if (!solution) {
