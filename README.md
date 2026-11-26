@@ -21,6 +21,12 @@ rotasi/fallback sesuai kebijakan masing-masing.
 Env opsional: `CF_BROWSER_HEADLESS=0` untuk browser headful (butuh X server/Xvfb).
 Tidak ada key provider captcha di repo.
 
+Turnstile browser solver sekarang memakai blank page + injection callback
+`onloadTurnstileCallback`, hidden input `cf-response`, dan klik checkbox pada
+iframe Cloudflare bila diminta. Task bisa mengirim `browserFirst: true` untuk
+mencoba browser solver lebih dulu. `proxy` boleh kosong (direct) atau berisi
+URL proxy HTTP/SOCKS5 ( dengan kredensial opsional ).
+
 `GET /health` mengembalikan versi app, commit Railway, jumlah task aktif,
 panjang antrean, jumlah profil, serta ketersediaan `cfsolve` dan browser runner.
 Untuk menghindari `spawn EAGAIN` pada Railway, hanya satu task yang berjalan
