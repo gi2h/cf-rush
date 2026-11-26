@@ -21,4 +21,9 @@ rotasi/fallback sesuai kebijakan masing-masing.
 Env opsional: `CF_BROWSER_HEADLESS=0` untuk browser headful (butuh X server/Xvfb).
 Tidak ada key provider captcha di repo.
 
+`GET /health` mengembalikan versi app, commit Railway, jumlah task aktif,
+panjang antrean, jumlah profil, serta ketersediaan `cfsolve` dan browser runner.
+Untuk menghindari `spawn EAGAIN` pada Railway, hanya satu task yang berjalan
+aktif per instance (`MAX_ACTIVE=1`); task lain menunggu di antrean.
+
 Detail investigasi ada di `REFERENCE.md` section 10–11.

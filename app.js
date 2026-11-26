@@ -20,8 +20,11 @@ const ADSLAB_RUNNER = path.join(__dirname, "adslab_runner.py");
 const WAF_RUNNER = path.join(__dirname, "cf_waf_solver.py");
 const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.js");
 
-const MAX_ACTIVE = 2; 
+// Railway Free/Hobby punya batas proses relatif ketat. Dua task aktif bisa
+// memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
+const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
+const APP_VERSION = "2026-11-26.1";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
@@ -289,6 +292,19 @@ function processQueue() {
         taskJob.run().finally(() => { activeTasks--; setImmediate(processQueue); });
     }
 }
+
+app.get("/health", (_req, res) => res.json({
+    ok: true,
+    version: APP_VERSION,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GITHUB_SHA || null,
+    pid: process.pid,
+    activeTasks,
+    queued: queue.length,
+    profiles: PROFILES.length,
+    cfsolve: fs.existsSync(CFSOLVE_BIN),
+    browserRunner: fs.existsSync(BROWSER_TURNSTILE_RUNNER),
+    maxActive: MAX_ACTIVE,
+}));
 
 const solveHandler = async (req, res) => {
     const body = req.body || {};
