@@ -240,6 +240,17 @@ Penanganan yang dipakai:
   Artinya ini bukan semata IP Railway yang diblokir; Cloudflare mengubah alur widget
   managed untuk solver request-based secara umum.
 
+Update 26 Nov 2026: kebijakan browser solver diperluas. Sebelumnya browser Turnstile
+hanya dipanggil bila cfsolve menghasilkan marker managed lama. Cloudflare juga
+mengembalikan kegagalan generik `POST returned HTTP 200 OK; Third response: not
+complete` untuk sitekey uji `1x00000000000000000000AA`, sehingga fallback tidak
+terpicu. Sekarang **setiap** kegagalan `type=turnstile` pada cfsolve dicoba dulu
+dengan `turnstile_browser_solver.js`, dan deteksi managed diperluas ke pola
+`POST returned HTTP 200 OK`, `Third response: not complete`, dan `program strings`.
+Hasil uji setelah deploy: `gi8` kembali `ready` untuk sitekey EarnLoop dan untuk
+sitekey uji always-pass; `gi9` masih `challenge did not complete after the
+interaction POST`, jadi client tetap melakukan rotasi/fallback.
+
 ---
 
 ## 11. Kenapa provider berbayar bisa: browser sungguhan, bukan emulasi request
