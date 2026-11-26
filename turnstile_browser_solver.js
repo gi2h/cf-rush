@@ -55,10 +55,33 @@ async function solve(payload) {
     const timeout = Math.min(120000, Math.max(20000, parseInt(payload.timeoutMs, 10) || 120000));
     const startTime = Date.now();
     const ua = payload.userAgent || payload.ua || "";
-    const proxy = payload.proxy ? String(payload.proxy) : "";
+    const proxy = payload.proxy ? String(payload.proxy).trim() : "";
     const headless = process.env.CF_BROWSER_HEADLESS !== "0";
     const args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"];
     if (ua) args.push("--user-agent=" + ua);
+
+    // Terima dua mode: proxy kosong = direct, proxy diisi = pakai proxy itu.
+    let proxyMode = "direct";
+    let proxyUser = "";
+    let proxyPass = "";
+    if (proxy) {
+        let parsed = proxy;
+        if (!/^[a-zA-Z]+:\/\//.test(parsed)) parsed = "http://" + parsed;
+        parsed = parsed.replace(/^socks5h:\/\//i, "socks5://");
+        try {
+            const u = new URL(parsed);
+            proxyMode = u.protocol.replace(":", "") || "http";
+            proxyUser = decodeURIComponent(u.username || "");
+            proxyPass = decodeURIComponent(u.password || "");
+            args.push(`--proxy-server=${u.protocol}//${u.host}`);
+            console.error(`[TS] proxy mode ${proxyMode} host=${u.host}`);
+        } catch (e) {
+            console.error("[TS] proxy parse warning: " + e.message);
+            proxyMode = "invalid";
+        }
+    } else {
+        console.error("[TS] proxy mode direct");
+    }
 
     let targetHost = domain;
     try { targetHost = new URL(domain).hostname; } catch (_) {}
@@ -78,19 +101,11 @@ async function solve(payload) {
         page.setDefaultNavigationTimeout(timeout);
         if (ua) await page.setUserAgent(ua);
 
-        if (proxy) {
+        if (proxyUser || proxyPass) {
             try {
-                let p = proxy;
-                if (!/^[a-zA-Z]+:\/\//.test(p)) p = "http://" + p;
-                const u = new URL(p);
-                if (u.username || u.password) {
-                    await page.authenticate({
-                        username: decodeURIComponent(u.username || ""),
-                        password: decodeURIComponent(u.password || "")
-                    });
-                }
+                await page.authenticate({ username: proxyUser, password: proxyPass });
             } catch (e) {
-                console.error("[TS] proxy parse warning: " + e.message);
+                console.error("[TS] proxy auth warning: " + e.message);
             }
         }
 
@@ -134,7 +149,8 @@ async function solve(payload) {
             }).catch(() => null);
             if (token && String(token).length > 10) {
                 const usedUa = await page.evaluate(() => navigator.userAgent).catch(() => ua);
-                return { ok: true, token: String(token), user_agent: usedUa, type: "turnstile" };
+                return { ok: true, token: String(token), user_agent: usedUa,
+                         type: "turnstile", proxy_mode: proxyMode };
             }
 
             const errCode = await page.evaluate(() => window.__cfError).catch(() => null);

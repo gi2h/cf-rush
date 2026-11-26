@@ -24,7 +24,7 @@ const BROWSER_TURNSTILE_RUNNER = path.join(__dirname, "turnstile_browser_solver.
 // memicu spawn EAGAIN saat cfsolve + browser + python WAF jalan bersamaan.
 const MAX_ACTIVE = 1;
 const MAX_QUEUE = 8;
-const APP_VERSION = "2026-11-26.3";
+const APP_VERSION = "2026-11-26.4";
 
 // Browser Turnstile solver memakai Chromium; jalankan satu per satu agar tidak
 // saling berebut memori/CPU di container Railway.
